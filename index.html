@@ -1,0 +1,236 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lovebackbone | 정면 균형 테스트</title>
+
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision/vision_bundle.js"></script>
+
+<style>
+body {
+  font-family: sans-serif;
+  text-align: center;
+  padding: 20px;
+  background: #f9f9f9;
+}
+
+h1 {
+  margin-bottom: 5px;
+}
+
+canvas {
+  border: 1px solid #ccc;
+  margin-top: 10px;
+  max-width: 100%;
+}
+
+.section {
+  margin: 20px 0;
+}
+
+.notice {
+  font-size: 14px;
+  color: #555;
+  line-height: 1.6;
+}
+
+.result {
+  font-size: 16px;
+  margin-top: 20px;
+  text-align: left;
+  display: inline-block;
+  background: white;
+  padding: 15px;
+  border-radius: 10px;
+  max-width: 400px;
+  white-space: pre-line;
+}
+
+button {
+  padding: 10px 20px;
+  margin-top: 10px;
+  cursor: pointer;
+}
+</style>
+</head>
+
+<body>
+
+<h1>정면 균형 테스트</h1>
+<p><b>사진 1장으로 신체 균형을 확인하세요</b></p>
+
+<div class="section notice">
+✔ 무료 서비스<br>
+✔ 사진 저장 없음 (즉시 삭제)<br>
+✔ 얼굴 자동 가림<br>
+✔ 의료 서비스 아님
+</div>
+
+<hr>
+
+<div class="section">
+<h3>촬영 안내</h3>
+<p class="notice">
+✔ 자연스럽게 서세요 (억지 교정 ❌)<br>
+✔ 밝은 환경<br>
+✔ 전신 촬영<br>
+✔ 가벼운 복장<br>
+✔ 최근 사진 사용
+</p>
+</div>
+
+<hr>
+
+<input type="file" id="imageInput" accept="image/*" />
+<br>
+
+<canvas id="canvas"></canvas>
+
+<div class="result" id="result"></div>
+
+<script>
+
+let poseLandmarker;
+
+const initPromise = (async function init() {
+  const vision = await FilesetResolver.forVisionTasks(
+    "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@latest/wasm"
+  );
+
+  poseLandmarker = await PoseLandmarker.createFromOptions(vision, {
+    baseOptions: {
+      modelAssetPath:
+        "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task"
+    },
+    runningMode: "IMAGE"
+  });
+})();
+
+document.getElementById("imageInput").addEventListener("change", async (event) => {
+
+  const file = event.target.files[0];
+  if (!file) return;
+
+  try {
+    await initPromise;
+  } catch (e) {
+    document.getElementById("result").innerText = "모델 로드 실패. 네트워크를 확인해 주세요.";
+    return;
+  }
+
+  const img = new Image();
+
+  img.onload = async () => {
+
+    const canvas = document.getElementById("canvas");
+    const ctx = canvas.getContext("2d");
+
+    canvas.width = img.width;
+    canvas.height = img.height;
+
+    ctx.drawImage(img, 0, 0);
+
+    const result = await poseLandmarker.detect(img);
+
+    if (!result.landmarks.length) {
+      document.getElementById("result").innerText = "인식 실패";
+      return;
+    }
+
+    const lm = result.landmarks[0];
+
+    // 중심 계산
+    const pelvisX = (lm[23].x + lm[24].x) / 2;
+    const shoulderX = (lm[11].x + lm[12].x) / 2;
+    const headX = lm[0].x;
+
+    const shoulderOffset = shoulderX - pelvisX;
+    const headOffset = headX - pelvisX;
+    const shoulderTilt = lm[11].y - lm[12].y;
+
+    // 점수 계산
+    let score = 100;
+    score -= Math.abs(shoulderOffset) * 120;
+    score -= Math.abs(headOffset) * 120;
+    score -= Math.abs(shoulderTilt) * 150;
+    score = Math.max(0, Math.round(score));
+
+    // 상태
+    let status = "";
+    if (score > 85) status = "균형 상태 양호";
+    else if (score > 70) status = "경미한 불균형";
+    else status = "불균형 상태";
+
+    // 방향
+    let direction = "";
+    if (shoulderOffset > 0) direction = "우측 쏠림";
+    else if (shoulderOffset < 0) direction = "좌측 쏠림";
+    else direction = "중앙 정렬";
+
+    // 상세 설명
+    let detail = "";
+    if (shoulderOffset > 0) {
+      detail = "어깨 중심이 우측으로 이동되어 있습니다\n골반 대비 상체가 우측으로 치우쳐 있습니다";
+    } else if (shoulderOffset < 0) {
+      detail = "어깨 중심이 좌측으로 이동되어 있습니다\n골반 대비 상체가 좌측으로 치우쳐 있습니다";
+    } else {
+      detail = "상체 중심이 비교적 중앙에 위치합니다";
+    }
+
+    // 생활 영향
+    let lifestyle = "장시간 같은 자세를 유지할 경우 척추 부담이 증가할 수 있습니다";
+
+    // 제안
+    let suggestion = "가벼운 스트레칭이나 자세 점검이 도움이 될 수 있습니다";
+
+    // 결과 출력
+    document.getElementById("result").innerText =
+`점수: ${score}점
+
+현재 상태: ${status}
+방향: ${direction}
+
+분석 결과:
+→ ${detail}
+
+생활 영향:
+→ ${lifestyle}
+
+제안:
+→ ${suggestion}`;
+
+    // 시각화
+    ctx.fillStyle = "red";
+    [lm[11], lm[12], lm[23], lm[24], lm[0]].forEach(p=>{
+      ctx.beginPath();
+      ctx.arc(p.x*canvas.width, p.y*canvas.height,5,0,2*Math.PI);
+      ctx.fill();
+    });
+
+    // 중심선
+    ctx.strokeStyle = "blue";
+    ctx.beginPath();
+    ctx.moveTo(pelvisX * canvas.width, 0);
+    ctx.lineTo(pelvisX * canvas.width, canvas.height);
+    ctx.stroke();
+
+    // 얼굴 가림
+    ctx.fillStyle = "black";
+    ctx.fillRect(
+      headX*canvas.width - 40,
+      lm[0].y*canvas.height - 40,
+      80,
+      80
+    );
+
+  };
+
+  img.src = URL.createObjectURL(file);
+
+});
+
+</script>
+
+</body>
+</html>
